@@ -1,0 +1,69 @@
+# Medical ASR POC - Simplified configuration for 200-sample dataset
+# Based on nvidia/canary-qwen-2.5b with LoRA fine-tuning
+
+name: "Medical-ASR-POC"
+
+model:
+  # Use pretrained Canary-Qwen-2.5b
+  # Note: This will download from HuggingFace on first run
+  restore_from_pretrained: nvidia/canary-qwen-2.5b
+
+  # Prompt configuration
+  audio_locator_tag: "<|audio|>"
+
+  # LoRA configuration (already built into the model)
+  # r=128, alpha=256, targeting q_proj and v_proj
+
+  # Optimizer
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr: 5e-4
+    betas: [0.9, 0.98]
+    weight_decay: 1e-3
+
+  # Learning rate scheduler
+  lr_scheduler:
+    _target_: nemo.core.optim.lr_scheduler.CosineAnnealing
+    warmup_steps: 50  # Reduced for small dataset
+    min_lr: 1e-6
+    max_steps: 500  # Total training steps for POC
+
+# Trainer configuration
+trainer:
+  devices: 1
+  accelerator: gpu
+  precision: bf16-mixed
+
+  max_steps: 500  # Enough for POC with 200 samples
+  val_check_interval: 50
+
+  log_every_n_steps: 10
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 4
+
+# Data configuration
+data:
+  train_ds:
+    manifest_filepath: /Users/michael/ws/savelives/data/processed/train_manifest_tts.json
+    sample_rate: 16000
+    batch_size: 4
+    shuffle: true
+    num_workers: 4
+
+  validation_ds:
+    manifest_filepath: /Users/michael/ws/savelives/data/processed/val_manifest_tts.json
+    sample_rate: 16000
+    batch_size: 1
+    shuffle: false
+    num_workers: 4
+
+# Experiment manager
+exp_manager:
+  exp_dir: /Users/michael/ws/savelives/experiments
+  name: ${name}
+  create_tensorboard_logger: true
+  create_checkpoint_callback: true
+  create_wandb_logger: true
+  wandb_logger_kwargs:
+    project: medical-asr-poc-michael
+    name: ${name}

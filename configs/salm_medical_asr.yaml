@@ -1,0 +1,143 @@
+# Medical ASR POC - Official NeMo SALM Configuration
+# Based on: https://github.com/NVIDIA/NeMo/blob/main/examples/speechlm2/conf/salm.yaml
+# Adapted for nvidia/canary-qwen-2.5b with JSON manifests (200-sample medical dataset)
+
+name: "Medical-ASR-Canary-Qwen"
+
+model:
+  # Pre-trained model - nvidia/canary-qwen-2.5b from HuggingFace
+  pretrained_weights: nvidia/canary-qwen-2.5b
+
+  # Prompt configuration (matches official Canary training)
+  audio_locator_tag: "<|audio|>"
+  prompt_format: canary_qwen  # Official prompt format for Canary+Qwen
+
+  # WER Calculator Configuration
+  wer_calculator:
+    normalizer: "open_asr_leaderboard"  # HF Open ASR Leaderboard compliant
+
+  # Training log prediction
+  log_prediction_train: true
+  log_prediction_train_samples: 5
+  log_prediction_train_interval: 50
+
+  # Validation log prediction
+  log_prediction_valid: true
+  log_prediction_valid_samples: 20
+
+  # LoRA configuration (matches official Canary-Qwen training)
+  lora:
+    task_type: CAUSAL_LM
+    r: 128                    # LoRA rank
+    lora_alpha: 256           # LoRA alpha scaling
+    lora_dropout: 0.01
+    target_modules: ["q_proj", "v_proj"]  # Target attention layers
+    inference_mode: false     # Training mode
+
+  # Optimizer (matches official SALM config)
+  optimizer:
+    _target_: torch.optim.AdamW
+    lr: 5e-4                  # Learning rate
+    betas: [0.9, 0.98]
+    weight_decay: 1e-3
+    foreach: true             # Efficient optimizer update
+
+  # Learning rate scheduler
+  lr_scheduler:
+    _target_: nemo.core.optim.lr_scheduler.CosineAnnealing
+    warmup_steps: 50          # Reduced for small dataset (200 samples)
+    warmup_ratio: null
+    min_lr: 1e-6
+    max_steps: 500            # Total training steps for POC
+
+# Trainer configuration (PyTorch Lightning)
+trainer:
+  devices: 1                  # Single GPU for POC
+  accelerator: gpu
+  precision: bf16-mixed       # Mixed precision training (matches official)
+
+  # Training configuration
+  max_steps: 500              # Enough for POC with 200 samples
+  max_epochs: null            # Use max_steps instead
+  val_check_interval: 50      # Validate every 50 steps
+  limit_val_batches: null     # Use all validation samples
+
+  # Logging and optimization
+  log_every_n_steps: 10
+  num_sanity_val_steps: 1
+  gradient_clip_val: 1.0
+  accumulate_grad_batches: 4  # Effective batch size = 4 * 4 = 16
+
+  # Disable defaults (provided by exp_manager)
+  logger: False
+  enable_checkpointing: False
+  use_distributed_sampler: False
+
+# Data configuration with JSON manifests (simplified for POC)
+data:
+  train_ds:
+    manifest_filepath: /Users/michael/ws/savelives/data/processed/train_manifest_tts.json
+    sample_rate: 16000
+    batch_size: 4
+    shuffle: true
+    num_workers: 4
+
+    # Prompt configuration (matches official Canary training)
+    prompt_format: canary_qwen
+    asr_context_prompt: "Transcribe the following: "
+    token_equivalent_duration: 0.08  # Audio frame to token conversion ratio
+
+    # Audio duration constraints
+    min_duration: 0.3
+    max_duration: 40.0
+
+  validation_ds:
+    manifest_filepath: /Users/michael/ws/savelives/data/processed/val_manifest_tts.json
+    sample_rate: 16000
+    batch_size: 1
+    shuffle: false
+    num_workers: 4
+
+    # Prompt configuration
+    prompt_format: canary_qwen
+    asr_context_prompt: "Transcribe the following: "
+    token_equivalent_duration: 0.08
+
+# Experiment manager configuration
+exp_manager:
+  exp_dir: /Users/michael/ws/savelives/experiments
+  name: ${name}
+  create_tensorboard_logger: true
+  create_checkpoint_callback: true
+
+  # Resume training configuration
+  resume_from_checkpoint: null
+  resume_if_exists: true
+  resume_ignore_no_checkpoint: true
+
+  # Checkpoint configuration
+  checkpoint_callback_params:
+    monitor: val_wer
+    mode: min
+    save_top_k: 3
+    filename: ${name}-{val_wer:.4f}-{step}
+    always_save_nemo: true
+    save_nemo_on_train_end: true
+
+  # Weights & Biases logging
+  create_wandb_logger: true
+  wandb_logger_kwargs:
+    name: canary-qwen-medical-finetune
+    project: medical-asr-poc-michael
+    resume: true
+
+# Notes:
+# - This config uses JSON manifests instead of lhotse shar format (simpler for POC)
+# - Training parameters are scaled down for 200-sample dataset:
+#   * warmup_steps: 50 (vs 1000 in official)
+#   * max_steps: 500 (vs 100000 in official)
+#   * batch_size: 4 (vs larger batches in official distributed training)
+# - For production training, consider:
+#   * Scaling to 1000+ samples
+#   * Using lhotse shar format for better performance
+#   * Multi-GPU distributed training
