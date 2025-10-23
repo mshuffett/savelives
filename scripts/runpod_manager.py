@@ -37,10 +37,14 @@ class RunPodManager:
     def create_pod(
         self,
         name: str,
-        gpu_type: str = "NVIDIA A100 80GB",
+        gpu_type: str = "NVIDIA A100-SXM4-80GB",
         image: str = "runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel",
         disk_size: int = 50,
         volume_path: str = "/workspace",
+        ports: str = "22/tcp,8888/http,6006/http",
+        docker_args: str | None = None,
+        inject_env: bool = True,
+        cloud: str = "COMMUNITY",
     ) -> Optional[Dict]:
         """
         Create a new GPU pod for training.
@@ -57,15 +61,33 @@ class RunPodManager:
         """
         try:
             print(f"Creating pod '{name}' with {gpu_type}...")
+            env = None
+            if inject_env:
+                # Pass through a minimal set of env vars to the container
+                keys = [
+                    "WANDB_API_KEY",
+                    "WANDB_PROJECT",
+                    "WANDB_ENTITY",
+                    "HF_TOKEN",
+                    "CHECKPOINT_DIR",
+                    "DATA_DIR",
+                    "LOG_DIR",
+                ]
+                env = {k: os.getenv(k) for k in keys if os.getenv(k)}
+
             pod = runpod.create_pod(
                 name=name,
                 image_name=image,
                 gpu_type_id=gpu_type,
-                cloud_type="SECURE",
+                cloud_type=cloud,
+                support_public_ip=True,
+                start_ssh=True,
                 volume_in_gb=disk_size,
                 container_disk_in_gb=disk_size,
                 volume_mount_path=volume_path,
-                ports="8888/http,6006/http",  # Jupyter and TensorBoard
+                ports=ports,
+                docker_args=docker_args or "",
+                env=env,
             )
 
             print(f"✓ Pod created: {pod['id']}")
@@ -85,7 +107,7 @@ class RunPodManager:
             print(f"Error getting pod {pod_id}: {e}")
             return None
 
-    def wait_for_running(self, pod_id: str, timeout: int = 300) -> bool:
+    def wait_for_running(self, pod_id: str, timeout: int = 600) -> bool:
         """
         Wait for pod to reach running state.
 
@@ -105,11 +127,15 @@ class RunPodManager:
                 return False
 
             status = pod.get("desiredStatus", "unknown")
-            runtime_status = pod.get("runtime", {}).get("uptimeInSeconds")
+            runtime = pod.get("runtime") or {}
+            # Some accounts return `uptimeSeconds` at top-level instead
+            uptime = runtime.get("uptimeInSeconds") if isinstance(runtime, dict) else None
+            if not uptime:
+                uptime = pod.get("uptimeSeconds")
 
-            print(f"  Status: {status}, Uptime: {runtime_status}s", end="\r")
+            print(f"  Status: {status}, Uptime: {uptime}s", end="\r")
 
-            if status == "RUNNING" and runtime_status and runtime_status > 10:
+            if status == "RUNNING" and uptime is not None and int(uptime) >= 10:
                 print(f"\n✓ Pod is running (uptime: {runtime_status}s)")
                 return True
 
@@ -157,9 +183,14 @@ class RunPodManager:
         if not pod:
             return None
 
-        runtime = pod.get("runtime", {})
-        ssh_port = runtime.get("ports", {}).get("22/tcp", [{}])[0].get("publicPort")
-        pod_ip = runtime.get("ip")
+        runtime = pod.get("runtime") or {}
+        ssh_port = None
+        pod_ip = None
+        if isinstance(runtime, dict):
+            ssh_info = runtime.get("ports", {}).get("22/tcp", [{}])
+            if ssh_info:
+                ssh_port = ssh_info[0].get("publicPort")
+            pod_ip = runtime.get("ip")
 
         if ssh_port and pod_ip:
             return f"ssh root@{pod_ip} -p {ssh_port}"
@@ -179,9 +210,12 @@ def main():
     # Create pod
     create_parser = subparsers.add_parser("create", help="Create a new pod")
     create_parser.add_argument("name", help="Pod name")
-    create_parser.add_argument("--gpu", default="NVIDIA A100 80GB", help="GPU type")
+    create_parser.add_argument("--gpu", default="NVIDIA A100-SXM4-80GB", help="GPU type")
     create_parser.add_argument("--image", default="runpod/pytorch:2.1.0-py3.10-cuda11.8.0-devel")
     create_parser.add_argument("--disk", type=int, default=50, help="Disk size in GB")
+    create_parser.add_argument("--ports", default="22/tcp,8888/http,6006/http")
+    create_parser.add_argument("--cmd", default="")
+    create_parser.add_argument("--cloud", default="COMMUNITY", choices=["COMMUNITY","SECURE","ALL"]) 
 
     # Get pod info
     info_parser = subparsers.add_parser("info", help="Get pod information")
@@ -223,6 +257,8 @@ def main():
             gpu_type=args.gpu,
             image=args.image,
             disk_size=args.disk,
+            ports=args.ports,
+            docker_args=args.cmd,
         )
         if pod:
             manager.wait_for_running(pod["id"])
