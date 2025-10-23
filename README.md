@@ -115,28 +115,52 @@ python src/train.py --config config/salm_lora.yaml
 - **Checkpoints**: `/workspace/checkpoints/canary-qwen-medical-lora/`
 - **Logs**: `/workspace/logs/`
 
+### 5. RunPod Continuous Command (auto-resume)
+
+For unattended training with auto-resume and backoff‑retry, use the loop script:
+
+```bash
+# On the pod inside the repo root
+bash runpod/start.sh
+```
+
+This will:
+- Ensure dependencies are installed
+- Download the 2k‑sample subset if missing
+- Train or resume from the latest checkpoint in `/workspace/checkpoints/canary-qwen-medical-lora`
+- Run a quick WER eval on ~200 validation samples
+- On failure, back off and retry without exiting
+
 ## 🔧 Configuration
 
 ### LoRA Parameters (`config/salm_lora.yaml`)
 
 ```yaml
 model:
-  peft:
-    peft_scheme: lora
-    adapter_dim: 16      # LoRA rank
-    alpha: 32            # LoRA alpha (2x rank)
-    dropout: 0.1
-    target_modules:      # Which layers to adapt
-      - linear_qkv
-      - linear_fc1
-      - linear_fc2
+  restore_from_path: nvidia/canary-qwen-2.5b
+  lora:
+    task_type: CAUSAL_LM
+    r: 16
+    lora_alpha: 32
+    lora_dropout: 0.1
 
 trainer:
   devices: 1
+  accelerator: gpu
   precision: bf16
   max_epochs: 5
   gradient_clip_val: 1.0
   accumulate_grad_batches: 4
+
+data:
+  train_ds:
+    manifest_filepath: /workspace/data/processed/train_manifest.json
+    sample_rate: 16000
+    batch_size: 4
+  validation_ds:
+    manifest_filepath: /workspace/data/processed/val_manifest.json
+    sample_rate: 16000
+    batch_size: 4
 ```
 
 ### Estimated Costs

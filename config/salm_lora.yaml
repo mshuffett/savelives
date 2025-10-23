@@ -36,39 +36,29 @@ trainer:
         every_n_train_steps: 500
 
 model:
-  # Base model configuration
-  restore_from_path: nvidia/canary-qwen-2.5b  # HuggingFace model ID
+  # Use the published SALM checkpoint as base
+  restore_from_path: nvidia/canary-qwen-2.5b
 
-  # Freeze settings (per NeMo guidelines)
-  freeze_llm: true  # Freeze LLM weights
-  freeze_audio_encoder: false  # Keep encoder trainable
+  # Optional LoRA configuration (delegated to NeMo SpeechLM2)
+  lora:
+    task_type: CAUSAL_LM
+    r: 16
+    lora_alpha: 32
+    lora_dropout: 0.1
 
-  # LoRA/PEFT Configuration
-  peft:
-    peft_scheme: lora
-    adapter_dim: 16  # LoRA rank (r)
-    alpha: 32  # LoRA alpha (typically 2x rank)
-    dropout: 0.1
-    adapter_dropout: 0.1
-    target_modules:
-      - linear_qkv
-      - linear_fc1
-      - linear_fc2
-      - linear_proj
+  # Optional freeze policy
+  # Many SALM examples freeze substantial portions of the LLM; rely on NeMo defaults
 
-  # Training data
+data:
   train_ds:
     manifest_filepath: /workspace/data/processed/train_manifest.json
     sample_rate: 16000
-    batch_size: 4  # Adjust based on GPU memory
+    batch_size: 4
     shuffle: true
     num_workers: 4
     pin_memory: true
-    max_duration: 40.0  # Max 40 seconds per NeMo guidelines
+    max_duration: 40.0
     min_duration: 0.5
-    trim_silence: true
-
-  # Validation data
   validation_ds:
     manifest_filepath: /workspace/data/processed/val_manifest.json
     sample_rate: 16000
@@ -78,23 +68,27 @@ model:
     max_duration: 40.0
     min_duration: 0.5
 
-  # Optimizer configuration
-  optim:
-    name: adamw
-    lr: 2e-4  # Learning rate for LoRA
-    betas: [0.9, 0.999]
-    weight_decay: 0.01
-
-    sched:
-      name: CosineAnnealing
-      warmup_steps: 100
-      min_lr: 1e-6
+optim:
+  name: adamw
+  lr: 2e-4
+  betas: [0.9, 0.999]
+  weight_decay: 0.01
+  sched:
+    name: CosineAnnealing
+    warmup_steps: 100
+    min_lr: 1e-6
 
 # Experiment metadata
 exp_manager:
   name: canary_qwen_medical_lora
   exp_dir: /workspace/logs/nemo_experiments
   create_tensorboard_logger: true
+  create_wandb_logger: true
+  wandb_logger_kwargs:
+    project: medical-asr-poc-michael
+    name: canary-qwen-medical-lora-v1
+    save_dir: /workspace/logs/wandb
+    log_model: false
   create_checkpoint_callback: true
   checkpoint_callback_params:
     monitor: val_wer
